@@ -30,7 +30,7 @@ loss.backward()
 **NOTE**: `p` must be an integer.
 
 ## `ignore_channel`
-This ignores a channel in your input `x`. You can use this to ignore background for example!
+This ignores a channel in your input `x`. You can use this to ignore the background label for example!
 
 ## `ignore_label`
 Similar to `ignore_channel`, this lets you ignore any integer label. This is useful for masking out unknown regions of an image that you don't want contributing to the loss or gradient calculation. This is different to `ignore_channel` in that it can be any integer label (e.g. -1).
@@ -46,5 +46,5 @@ dice(x,y) = 1 - (2*x'*y + smooth)/(x^p + y^p + smooth)
 This can be "mean", "sum" or "none".
 * "mean" -- calculates the mean dice loss over the batch (each individual batch instance being an average over class labels).
 * "sum" -- calculates the sum of dice losses over the batch.
-* "none" -- Returns a list of losses for each batch instance.
+* "none" -- returns a list of losses (one loss for each batch instance).
 
