@@ -29,6 +29,14 @@ loss.backward()
 ```
 **NOTE**: `p` must be an integer.
 
+## Inputs
+* `x` -- [ BatchSize, Channels, d1, d2, ... ] (torch.float32 or torch.float64)
+* `y`-- [ BatchSize, d1, d2, ... ] (torch.long)
+
+## Outputs
+* `reduction` = "mean"/"sum" -- scalar
+* `reduction` = "none" -- [ BatchSize ]
+
 ## `ignore_channel`
 This ignores a channel in your input `x`. You can use this to ignore the background label for example!
 
