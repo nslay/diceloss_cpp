@@ -46,8 +46,9 @@ Similar to `ignore_channel`, this lets you ignore any integer label. This is use
 ## `smooth`, `p`
 These are terms in the dice calculation given below
 ```
-dice(x,y) = 1 - (2*x'*y + smooth)/(x^p + y^p + smooth)
+dice(x,y) = 1 - (2*x'*y + smooth)/(|x|_p^p + |y|_p^p + smooth)
 ```
+where `|x|_p` is p-norm of `x`.
 
 
 ## `reduction`
