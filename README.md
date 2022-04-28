@@ -4,7 +4,7 @@ Memory-efficient DiceLoss for PyTorch
 # Introduction
 Some of the dice loss implementations I've seen calculate softmax and one-hot encoded masks. This is not a big deal in 2D, but in 3D, this is extremely wasteful in memory. If you have batch size B and K classes, the one-hot mask will require B * K * H * W * D in memory and the softmax will require twice that (one for the gradient). So my workaround is to... not store one-hot encoded masks or softmax and instead calculate everything on the fly in the dice loss.
 
-The DiceLoss in this repository fuses one-hot and softmax into the dice loss calculation so that you do not need to store one-hot encoded masks or softmax. Code for both CPU and GPU have been implemented and tested. It's almost certaintly not computationally optimal! But at least you can fit more on the GPU!
+The DiceLoss in this repository calculates the multi-class dice loss (average of binary dice losses over classes/channels) and fuses one-hot and softmax into the dice loss calculation so that you do not need to store one-hot encoded masks or softmax. Code for both CPU and GPU have been implemented and tested. It's almost certaintly not computationally optimal! But at least you can fit more on the GPU!
 
 This is still experimental. Beware of bugs! Though it's chewing through KITS19 data for me just fine!
 
@@ -38,7 +38,7 @@ loss.backward()
 * `reduction` = "none" -- [ BatchSize ]
 
 ## `ignore_channel`
-This ignores computing the binary dice loss along one of the input channels. If `ignore_channel` is not one of the integers in the range `[0, Channels)`, then this option has no effect on dice loss calculation (binary dice loss will be calculated along all channels). Binary dice loss for other channels will be computed normally even when encountering mask labels of `ignore_channel`. This is useful for ignoring the background label.
+This ignores computing the binary dice loss along one of the input channels. If `ignore_channel` is not one of the integers in the range [0, Channels), then this option has no effect on dice loss calculation (binary dice loss will be calculated along all channels). Binary dice loss for other channels will be computed normally even when encountering mask labels of `ignore_channel`. This is useful for ignoring the background label.
 
 ## `ignore_label`
 In contrast to `ignore_channel`, this ignores any computation related to **all** binary dice losses over all channels whenever the mask label is `ignore_label`. This is useful for ignoring *don't-care* or *unknown* regions of an image. There will be no loss or gradient contribution in regions of the mask with label `ignore_label`. The `ignore_label` can be any integer. If the mask has no `ignore_label` labels, this option has no effect on dice loss calculation.
