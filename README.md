@@ -38,17 +38,17 @@ loss.backward()
 * `reduction` = "none" -- [ BatchSize ]
 
 ## `ignore_channel`
-This ignores a channel in your input `x`. You can use this to ignore the background label for example!
+This ignores computing the binary dice loss along one of the input channels. If `ignore_channel` is not one of the integers in the range `[0, Channels)`, then this option has no effect on dice loss calculation (binary dice loss will be calculated along all channels). Binary dice loss for other channels will be computed normally even when encountering mask labels of `ignore_channel`. This is useful for ignoring the background label.
 
 ## `ignore_label`
-Similar to `ignore_channel`, this lets you ignore any integer label. This is useful for masking out unknown regions of an image that you don't want contributing to the loss or gradient calculation. This is different to `ignore_channel` in that it can be any integer label (e.g. -1).
+In contrast to `ignore_channel`, this ignores any computation related to **all** binary dice losses over all channels whenever the mask label is `ignore_label`. This is useful for ignoring *don't-care* or *unknown* regions of an image. There will be no loss or gradient contribution in regions of the mask with label `ignore_label`. The `ignore_label` can be any integer. If the mask has no `ignore_label` labels, this option has no effect on dice loss calculation.
 
 ## `smooth`, `p`
 These are terms in the dice calculation given below
 ```
 dice(x,y) = 1 - (2*x'*y + smooth)/(|x|_p^p + |y|_p^p + smooth)
 ```
-where `|x|_p` is p-norm of `x`.
+where `|x|_p` is the p-norm of `x`.
 
 
 ## `reduction`
