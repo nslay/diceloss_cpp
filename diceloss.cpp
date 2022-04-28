@@ -39,13 +39,11 @@ namespace {
 
 template<typename RealType>
 void softmax(RealType *p_outData, const RealType *p_inData, int64_t i64NumChannels, int64_t i64Stride) {
-  int64_t cmax = 0;
+  RealType offset = p_inData[i64Stride*0];
   for (int64_t c = 1; c < i64NumChannels; ++c) {
-    if (p_inData[i64Stride*cmax] < p_inData[i64Stride*c])
-      cmax = c;
+    if (offset < p_inData[i64Stride*c])
+      offset = p_inData[i64Stride*c];
   }
-
-  const RealType offset = p_inData[i64Stride*cmax];
 
   RealType norm = RealType(0);
   for (int64_t c = 0; c < i64NumChannels; ++c) {
@@ -275,11 +273,9 @@ std::vector<torch::Tensor> diceloss_cpu_backward(torch::Tensor inData, bool bInD
         softmax(p_values, p_inData + (b*i64NumChannels + 0)*i64InnerDataNum + i, i64NumChannels, i64InnerDataNum);
 
         for (int64_t c = 0; c < i64NumChannels; ++c) {
-          if (c == i64IgnoreChannel)
-            continue;
-
+          // NOTE:  Owing to the Jacobian multiplication, we can't ignore c == ignore_channel here!
           for (int64_t c2 = 0; c2 < i64NumChannels; ++c2) {
-            if (c2 == i64IgnoreChannel)
+            if (c2 == i64IgnoreChannel) // This loss term is discarded (constant), so the partial = 0 for this term
               continue;
 
             const RealType delta = RealType(c == c2 ? 1 : 0);
@@ -298,7 +294,6 @@ std::vector<torch::Tensor> diceloss_cpu_backward(torch::Tensor inData, bool bInD
           p_inDataGrad[(b*i64NumChannels + c)*i64InnerDataNum + i] *= scale * p_values[c];
         }
       }
-
     }
 
     vGradTensors[0] = inDataGrad;
@@ -306,6 +301,18 @@ std::vector<torch::Tensor> diceloss_cpu_backward(torch::Tensor inData, bool bInD
 
   return vGradTensors;
 }
+
+#ifndef WITH_CUDA
+template<typename RealType>
+torch::Tensor diceloss_gpu_forward(torch::Tensor, torch::Tensor, int64_t, int64_t, const RealType &, int, ReductionType) {
+  return torch::Tensor();
+}
+
+template<typename RealType>
+std::vector<torch::Tensor> diceloss_gpu_backward(torch::Tensor, bool, torch::Tensor, bool, torch::Tensor, int64_t, int64_t, const RealType &, int, ReductionType) {
+  return std::vector<torch::Tensor>();
+}
+#endif // !WITH_CUDA
 
 torch::Tensor diceloss_forward(torch::Tensor inData, torch::Tensor inMask, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, double dSmooth, int p, const std::string &strReduction) {
   if (inMask.scalar_type() != torch::kInt64)
