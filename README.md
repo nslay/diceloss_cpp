@@ -1,6 +1,9 @@
 # diceloss_cpp
 Memory-efficient DiceLoss for PyTorch
 
+# Caution!
+Be careful with empty segmentation masks (especially if you are ignoring the background channel). The dice loss gradient is not necessarily 0 and can lead to head-scratching moments! Perhaps `p = 2` and `smooth = 1` are safer options for this corner case. This is what other dice loss implementations generally use.
+
 # Introduction
 Some of the dice loss implementations I've seen calculate softmax and one-hot encoded masks. This is not a big deal in 2D, but in 3D, this is extremely wasteful in memory. If you have batch size B and K classes, the one-hot mask will require B * K * H * W * D in memory and the softmax will require twice that (one for the gradient). So my workaround is to... not store one-hot encoded masks or softmax and instead calculate everything on the fly in the dice loss.
 
