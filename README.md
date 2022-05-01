@@ -20,7 +20,7 @@ Once compiled and installed, you should be able to do something like this:
 ```py
 from DiceLoss import DiceLoss
 
-dice = DiceLoss(ignore_channel = -1, ignore_label = -1, smooth = 1e-3, p = 1, reduction = "mean")
+dice = DiceLoss(ignore_channel = -1, ignore_label = -1, smooth = 0, p = 1, reduction = "mean")
 x = torch.rand([8, 5, 100, 100, 100]).cuda()
 y = torch.randint(size=[8, 100, 100, 100], low=0, high=6).type(torch.long).cuda()
 
