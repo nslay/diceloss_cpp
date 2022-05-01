@@ -60,7 +60,7 @@ class _DiceLoss(torch.autograd.Function):
 class DiceLoss(nn.Module):
     supported_reductions = { "none", "mean", "sum" }
 
-    def __init__(self, ignore_channel=-1, ignore_label=-1, smooth=1e-3, p=1, reduction="mean"):
+    def __init__(self, ignore_channel=-1, ignore_label=-1, smooth=0, p=1, reduction="mean"):
         super().__init__()
 
         if reduction not in DiceLoss.supported_reductions:

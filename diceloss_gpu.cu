@@ -121,6 +121,24 @@ __global__ void DiceLossForwardKernel(const RealType *d_inData, const int64_t *d
   }
 }
 
+// Kernel to deal with corner case
+template<typename RealType>
+__global__ void DiceLossForwardKernel2(const RealType *d_num, const RealType *d_den, RealType *d_outLoss, int64_t i64BatchSize, int64_t i64NumChannels) {
+  const int64_t b = (int64_t)blockIdx.y * blockDim.y + threadIdx.y;
+  const int64_t c = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (b < i64BatchSize && c < i64NumChannels) {
+    const RealType num = d_num[b*i64NumChannels + c];
+    const RealType den = d_den[b*i64NumChannels + c];
+
+    // By definition: den >= num and we say DSC = 1 when comparing two empty sets (which are the same)
+    if (den == RealType(0))
+      d_outLoss[b*i64NumChannels + c] = RealType(0);
+    else
+      d_outLoss[b*i64NumChannels + c] = RealType(1) - num/den;
+  }
+}
+
 template<typename RealType>
 __global__ void DiceLossBackwardKernelData(const RealType *d_inData, const int64_t *d_i64InMask, const RealType *d_num, const RealType *d_den, const RealType *d_outLossGrad, RealType *d_inDataGrad, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, int p, ReductionType eReduction, int64_t i64BatchSize, int64_t i64NumChannels, int64_t i64InnerDataNum) {
   // Workaround shared memory limitation in template functions... as described here:
@@ -168,6 +186,10 @@ __global__ void DiceLossBackwardKernelData(const RealType *d_inData, const int64
 
         const RealType delta = RealType(c == c2 ? 1 : 0);
         const RealType binaryLabel = RealType(i64Label == c2 ? 1 : 0);
+
+        // Recall den >= num
+        if (den == RealType(0)) // If num == 0, the DSC curve is a constant 0, so we say the limiting case has 0 derivative
+          continue;
 
         switch (p) {
         case 1:
@@ -231,7 +253,22 @@ torch::Tensor diceloss_gpu_forward(torch::Tensor inData, torch::Tensor inMask, i
 
   DiceLossForwardKernel<RealType><<<numBlocks, threadsPerBlock, sharedMem>>>(d_inData, d_i64InMask, d_num, d_den, i64IgnoreChannel, i64IgnoreLabel, p, i64BatchSize, i64NumChannels, i64InnerDataNum);
 
-  torch::Tensor outLoss = RealType(1) - (RealType(2)*num + smooth)/(den + smooth);
+  torch::Tensor outLoss = torch::zeros_like(num);
+
+  num *= RealType(2);
+  num += smooth;
+  den += smooth;
+
+  {
+    // Over channels instead of InnerDataNum
+    const dim3 numBlocks((i64NumChannels + threadsPerBlock.x-1)/threadsPerBlock.x, (i64BatchSize + threadsPerBlock.y - 1)/threadsPerBlock.y);
+    RealType * const d_outLoss = outLoss.data_ptr<RealType>();
+
+    // This kernel deals with corner case
+    DiceLossForwardKernel2<RealType><<<numBlocks, threadsPerBlock>>>(d_num, d_den, d_outLoss, i64BatchSize, i64NumChannels);
+  }
+
+  //torch::Tensor outLoss = RealType(1) - (RealType(2)*num + smooth)/(den + smooth);
   outLoss = outLoss.mean(IntArrayRef(1));
 
   switch (eReduction) {

@@ -141,7 +141,14 @@ torch::Tensor diceloss_cpu_forward(torch::Tensor inData, torch::Tensor inMask, i
       if (c == i64IgnoreChannel)
         continue;
 
-      p_outLoss[b] += RealType(1) - (RealType(2)*p_num[c] + smooth)/(p_den[c] + smooth);
+      p_num[c] = RealType(2)*p_num[c] + smooth;
+      p_den[c] += smooth;
+
+      // By definition: den >= num and we say DSC = 1 when comparing two empty sets (which are the same)
+      if (p_den[c] == RealType(0))
+        p_outLoss[b] = RealType(0);
+      else
+        p_outLoss[b] += RealType(1) - p_num[c]/p_den[c];
     }
 
     p_outLoss[b] /= RealType(i64NumChannels);
@@ -280,6 +287,10 @@ std::vector<torch::Tensor> diceloss_cpu_backward(torch::Tensor inData, bool bInD
 
             const RealType delta = RealType(c == c2 ? 1 : 0);
             const RealType binaryLabel = RealType(i64Label == c2 ? 1 : 0);
+
+            // Recall den >= num
+            if (p_den[c2] == RealType(0)) // If num == 0, the DSC curve is a constant 0, so we say the limiting case has 0 derivative
+              continue;
 
             switch (p) {
             case 1:
