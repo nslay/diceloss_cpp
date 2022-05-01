@@ -64,11 +64,11 @@ ce = nn.CrossEntropyLoss()
 dice = nn.DiceLoss(ignore_channel=0, reduction="none") # This reduction returns a list of losses per batch instance.
 ...
 for xbatch, ybatch in batcher:
-  optim.zero_grad()
+  optimizer.zero_grad()
   
   loss1 = ce(xbatch, ybatch)
   
-  # ybatch is [BatchSize, Height, Width ...]
+  # ybatch is [BatchSize, ..., Height, Width]
   batchWeight = (ybatch.view([ybatch.shape[0], -1]).max(dim=1)[0] > 0)
 
   loss2 = dice(xbatch, ybatch)
@@ -78,6 +78,6 @@ for xbatch, ybatch in batcher:
   
   loss.backward()
   
-  optim.step()
+  optimizer.step()
 ```
 Forgive me if there are errors. It's just a rough example of what you could do to avoid dice loss issues on empty segmentation masks in your training set.
