@@ -61,7 +61,7 @@ This can be "mean", "sum" or "none".
 Be careful with empty segmentation masks (especially if you are ignoring the background channel). The dice loss gradient is not necessarily 0 and can lead to head-scratching moments! One strategy to deal with batch instances with empty segmentation masks is to zero out the loss for those instances. For example, you can do something like this
 ```py
 ce = nn.CrossEntropyLoss()
-dice = nn.DiceLoss(ignore_channel=0, reduction="none") # This reduction returns a list of losses per batch instance.
+dice = nn.DiceLoss(ignore_channel=0, reduction="none") # This reduction returns a list of losses per batch.
 ...
 for xbatch, ybatch in batcher:
   optimizer.zero_grad()
@@ -70,7 +70,7 @@ for xbatch, ybatch in batcher:
   
   loss1 = ce(outputs, ybatch)
   
-  # ybatch is [BatchSize, ..., Height, Width]
+  # ybatch is [BatchSize, Height, Width] or [BatchSize, Depth, Height, Width] or etc...
   batchWeight = (ybatch.view([ybatch.shape[0], -1]).max(dim=1)[0] > 0)
 
   loss2 = dice(outputs, ybatch)
