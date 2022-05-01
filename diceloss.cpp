@@ -145,9 +145,7 @@ torch::Tensor diceloss_cpu_forward(torch::Tensor inData, torch::Tensor inMask, i
       p_den[c] += smooth;
 
       // By definition: den >= num and we say DSC = 1 when comparing two empty sets (which are the same)
-      if (p_den[c] == RealType(0))
-        p_outLoss[b] = RealType(0);
-      else
+      if (p_den[c] != RealType(0))
         p_outLoss[b] += RealType(1) - p_num[c]/p_den[c];
     }
 
