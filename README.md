@@ -1,9 +1,6 @@
 # diceloss_cpp
 Memory-efficient DiceLoss for PyTorch
 
-# Caution!
-Be careful with empty segmentation masks (especially if you are ignoring the background channel). The dice loss gradient is not necessarily 0 and can lead to head-scratching moments! Perhaps `p = 2` and `smooth = 1` are safer options for this corner case. This is what other dice loss implementations generally use.
-
 # Introduction
 Some of the dice loss implementations I've seen calculate softmax and one-hot encoded masks. This is not a big deal in 2D, but in 3D, this is extremely wasteful in memory. If you have batch size B and K classes, the one-hot mask will require B * K * H * W * D in memory and the softmax will require twice that (one for the gradient). So my workaround is to... not store one-hot encoded masks or softmax and instead calculate everything on the fly in the dice loss.
 
@@ -60,3 +57,27 @@ This can be "mean", "sum" or "none".
 * "sum" -- calculates the sum of dice losses over the batch.
 * "none" -- returns a list of losses (one loss for each batch instance).
 
+# Caution!
+Be careful with empty segmentation masks (especially if you are ignoring the background channel). The dice loss gradient is not necessarily 0 and can lead to head-scratching moments! One strategy to deal with batch instances with empty segmentation masks is to zero out the loss for those instances. For example, you can do something like this
+```py
+ce = nn.CrossEntropyLoss()
+dice = nn.DiceLoss(ignore_channel=0, reduction="none") # This reduction returns a list of losses per batch instance.
+...
+for xbatch, ybatch in batcher:
+  optim.zero_grad()
+  
+  loss1 = ce(xbatch, ybatch)
+  
+  # ybatch is [BatchSize, Height, Width ...]
+  batchWeight = (ybatch.view([ybatch.shape[0], -1]).max(dim=1)[0] > 0)
+
+  loss2 = dice(xbatch, ybatch)
+  loss2 = (loss2*batchWeight).mean() # Aggregate with your batch instance weights
+  
+  loss = loss1 + loss2
+  
+  loss.backward()
+  
+  optim.step()
+```
+Forgive me if there are errors. It's just a rough example of what you could do to avoid dice loss issues on empty segmentation masks in your training set.
