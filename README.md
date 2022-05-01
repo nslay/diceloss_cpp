@@ -66,12 +66,14 @@ dice = nn.DiceLoss(ignore_channel=0, reduction="none") # This reduction returns 
 for xbatch, ybatch in batcher:
   optimizer.zero_grad()
   
-  loss1 = ce(xbatch, ybatch)
+  outputs = net(xbatch)
+  
+  loss1 = ce(outputs, ybatch)
   
   # ybatch is [BatchSize, ..., Height, Width]
   batchWeight = (ybatch.view([ybatch.shape[0], -1]).max(dim=1)[0] > 0)
 
-  loss2 = dice(xbatch, ybatch)
+  loss2 = dice(outputs, ybatch)
   loss2 = (loss2*batchWeight).mean() # Aggregate with your batch instance weights
   
   loss = loss1 + loss2
