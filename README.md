@@ -58,7 +58,7 @@ This can be "mean", "sum" or "none".
 * "none" -- returns a list of losses (one loss for each batch instance).
 
 # Caution!
-Be careful with empty segmentation masks (especially if you are ignoring the background channel). The dice loss gradient is not necessarily 0 and can lead to head-scratching moments! One strategy to deal with batch instances with empty segmentation masks is to zero out the loss for those instances. For example, you can do something like this
+Be careful with empty segmentation masks (especially if you are ignoring the background channel). The dice loss gradient is not necessarily 0 and can lead to head-scratching moments! Using `smooth=0` can ensure partial derivatives are 0 in these corner cases. Another strategy to deal with batch instances with empty segmentation masks is to zero out the loss for those instances. For example, you can do something like this
 ```py
 ce = nn.CrossEntropyLoss()
 dice = nn.DiceLoss(ignore_channel=0, reduction="none") # This reduction returns a list of losses per batch.
