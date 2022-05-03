@@ -34,7 +34,7 @@ loss.backward()
 * `y`-- [ BatchSize, d1, d2, ... ] (torch.long)
 
 ## Outputs
-* `reduction` = "mean"/"sum" -- scalar
+* `reduction` = "mean"/"sum"/"batch" -- scalar
 * `reduction` = "none" -- [ BatchSize ]
 
 ## `ignore_channel`
@@ -62,7 +62,7 @@ This can be "mean", "sum" or "none".
 Be careful with empty segmentation masks (especially if you are ignoring the background channel). The dice loss gradient is not necessarily 0 and can lead to head-scratching moments! Using `smooth=0` can ensure partial derivatives are 0 in these corner cases. Using `reduction="batch"` can help prevent encountering empty segmentation masks since even a single non-empty segmentation mask in a batch will count for the entire batch. Another strategy to deal with batch instances with empty segmentation masks is to zero out the loss for those instances. For example, you can do something like this
 ```py
 ce = nn.CrossEntropyLoss()
-dice = nn.DiceLoss(ignore_channel=0, reduction="none") # This reduction returns a list of losses per batch.
+dice = DiceLoss(ignore_channel=0, reduction="none") # This reduction returns a list of losses per batch.
 ...
 for xbatch, ybatch in batcher:
   optimizer.zero_grad()
