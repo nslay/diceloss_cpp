@@ -52,7 +52,7 @@ where `|x|_p` is the p-norm of `x`.
 
 
 ## `reduction`
-This can be "mean", "sum" or "none".
+This can be "batch", "mean", "sum" or "none".
 * "mean" -- calculates the mean dice loss over the batch (each individual batch instance being an average over class labels).
 * "sum" -- calculates the sum of dice losses over the batch.
 * "none" -- returns a list of losses (one loss for each batch instance).
