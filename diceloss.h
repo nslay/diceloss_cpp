@@ -26,7 +26,7 @@
 #include <string>
 
 // This enum is the ONLY reason this file exists!
-enum ReductionType { UnknownReduction = -1, NoneReduction, MeanReduction, SumReduction };
+enum ReductionType { UnknownReduction = -1, NoneReduction, MeanReduction, SumReduction, BatchDiceReduction };
 
 ReductionType GetReductionByName(std::string strReduction);
 

@@ -62,7 +62,7 @@ namespace {
 
 template<typename RealType>
 __device__ void softmax(RealType *d_outData, const RealType *d_inData, int64_t i64NumChannels, int64_t i64Stride) {
-   RealType offset = d_inData[i64Stride*0];
+  RealType offset = d_inData[i64Stride*0];
   for (int64_t c = 1; c < i64NumChannels; ++c) {
     if (offset < d_inData[i64Stride*c])
       offset = d_inData[i64Stride*c];
@@ -167,10 +167,16 @@ __global__ void DiceLossBackwardKernelData(const RealType *d_inData, const int64
       scale = *d_outLossGrad / RealType(i64NumChannels * i64BatchSize);
       break;
     case SumReduction:
+    case BatchDiceReduction: // Fall through
       scale = *d_outLossGrad / RealType(i64NumChannels);
       break;
     default:
       break;
+    }
+
+    if (eReduction != BatchDiceReduction) {
+      d_num += b*i64NumChannels;
+      d_den += b*i64NumChannels;
     }
 
     softmax(d_values, d_inData + (b*i64NumChannels + 0)*i64InnerDataNum + i, i64NumChannels, i64InnerDataNum);
@@ -181,8 +187,8 @@ __global__ void DiceLossBackwardKernelData(const RealType *d_inData, const int64
         if (c2 == i64IgnoreChannel) // This loss term is discarded (constant), so the partial = 0 for this term
           continue;
 
-        const RealType num = d_num[b*i64NumChannels + c2];
-        const RealType den = d_den[b*i64NumChannels + c2];
+        const RealType num = d_num[c2];
+        const RealType den = d_den[c2];
 
         const RealType delta = RealType(c == c2 ? 1 : 0);
         const RealType binaryLabel = RealType(i64Label == c2 ? 1 : 0);
@@ -248,24 +254,33 @@ torch::Tensor diceloss_gpu_forward(torch::Tensor inData, torch::Tensor inMask, i
   torch::Tensor num = torch::zeros({ i64BatchSize, i64NumChannels }, clOptions);
   torch::Tensor den = torch::zeros({ i64BatchSize, i64NumChannels }, clOptions);
 
-  RealType * const d_num = num.data_ptr<RealType>();
-  RealType * const d_den = den.data_ptr<RealType>();
+  {
+    RealType * const d_num = num.data_ptr<RealType>();
+    RealType * const d_den = den.data_ptr<RealType>();
 
-  DiceLossForwardKernel<RealType><<<numBlocks, threadsPerBlock, sharedMem>>>(d_inData, d_i64InMask, d_num, d_den, i64IgnoreChannel, i64IgnoreLabel, p, i64BatchSize, i64NumChannels, i64InnerDataNum);
+    DiceLossForwardKernel<RealType><<<numBlocks, threadsPerBlock, sharedMem>>>(d_inData, d_i64InMask, d_num, d_den, i64IgnoreChannel, i64IgnoreLabel, p, i64BatchSize, i64NumChannels, i64InnerDataNum);
+  }
 
-  torch::Tensor outLoss = torch::zeros_like(num);
+  if (eReduction == BatchDiceReduction) {
+    num = num.sum(IntArrayRef(0), true);
+    den = den.sum(IntArrayRef(0), true);
+  }
 
   num *= RealType(2);
   num += smooth;
   den += smooth;
 
-  {
-    // Over channels instead of InnerDataNum
-    const dim3 numBlocks((i64NumChannels + threadsPerBlock.x-1)/threadsPerBlock.x, (i64BatchSize + threadsPerBlock.y - 1)/threadsPerBlock.y);
+  torch::Tensor outLoss = torch::zeros_like(num);
+
+  {    // Over channels instead of InnerDataNum
+    const dim3 numBlocks((i64NumChannels + threadsPerBlock.x-1)/threadsPerBlock.x, (outLoss.sizes()[0] + threadsPerBlock.y - 1)/threadsPerBlock.y);
     RealType * const d_outLoss = outLoss.data_ptr<RealType>();
 
+    const RealType * const d_num = num.data_ptr<RealType>();
+    const RealType * const d_den = den.data_ptr<RealType>();
+
     // This kernel deals with corner case
-    DiceLossForwardKernel2<RealType><<<numBlocks, threadsPerBlock>>>(d_num, d_den, d_outLoss, i64BatchSize, i64NumChannels);
+    DiceLossForwardKernel2<RealType><<<numBlocks, threadsPerBlock>>>(d_num, d_den, d_outLoss, outLoss.sizes()[0], i64NumChannels);
   }
 
   //torch::Tensor outLoss = RealType(1) - (RealType(2)*num + smooth)/(den + smooth);
@@ -273,6 +288,7 @@ torch::Tensor diceloss_gpu_forward(torch::Tensor inData, torch::Tensor inMask, i
 
   switch (eReduction) {
   case NoneReduction:
+  case BatchDiceReduction: // Fall through
     return outLoss;
   case MeanReduction:
     return outLoss.mean();
@@ -313,6 +329,7 @@ std::vector<torch::Tensor> diceloss_gpu_backward(torch::Tensor inData, bool bInD
     break;
   case MeanReduction:
   case SumReduction: // Fall through
+  case BatchDiceReduction: // Fall through
     if (outLossGrad.numel() != 1)
       return std::vector<torch::Tensor>();
     break;
@@ -347,11 +364,17 @@ std::vector<torch::Tensor> diceloss_gpu_backward(torch::Tensor inData, bool bInD
   torch::Tensor num = torch::zeros({ i64BatchSize, i64NumChannels }, clOptions);
   torch::Tensor den = torch::zeros({ i64BatchSize, i64NumChannels }, clOptions);
 
-  RealType * const d_num = num.data_ptr<RealType>();
-  RealType * const d_den = den.data_ptr<RealType>();
+  {
+    RealType * const d_num = num.data_ptr<RealType>();
+    RealType * const d_den = den.data_ptr<RealType>();
 
-  // Calculate d_num and d_den... we can't ignore any channel here!
-  DiceLossForwardKernel<RealType><<<numBlocks, threadsPerBlock, sharedMem>>>(d_inData, d_i64InMask, d_num, d_den, i64IgnoreChannel, i64IgnoreLabel, p, i64BatchSize, i64NumChannels, i64InnerDataNum);
+    DiceLossForwardKernel<RealType><<<numBlocks, threadsPerBlock, sharedMem>>>(d_inData, d_i64InMask, d_num, d_den, i64IgnoreChannel, i64IgnoreLabel, p, i64BatchSize, i64NumChannels, i64InnerDataNum);
+  }
+
+  if (eReduction == BatchDiceReduction) {
+    num = num.sum(IntArrayRef(0), true);
+    den = den.sum(IntArrayRef(0), true);
+  }
 
   num *= RealType(2);
   num += smooth;
@@ -360,6 +383,9 @@ std::vector<torch::Tensor> diceloss_gpu_backward(torch::Tensor inData, bool bInD
   if (bInDataGrad) {
     torch::Tensor inDataGrad = torch::zeros_like(inData);
     RealType * const d_inDataGrad = inDataGrad.data_ptr<RealType>();
+
+    RealType * const d_num = num.data_ptr<RealType>();
+    RealType * const d_den = den.data_ptr<RealType>();
 
     DiceLossBackwardKernelData<RealType><<<numBlocks, threadsPerBlock, sharedMem>>>(d_inData, d_i64InMask, d_num, d_den, d_outLossGrad, d_inDataGrad, i64IgnoreChannel, i64IgnoreLabel, p, eReduction, i64BatchSize, i64NumChannels, i64InnerDataNum);
 

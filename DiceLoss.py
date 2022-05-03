@@ -58,7 +58,7 @@ class _DiceLoss(torch.autograd.Function):
         return inDataGrad, inMaskGrad, None, None, None, None, None
 
 class DiceLoss(nn.Module):
-    supported_reductions = { "none", "mean", "sum" }
+    supported_reductions = { "none", "mean", "sum", "batch" }
 
     def __init__(self, ignore_channel=-1, ignore_label=-1, smooth=0, p=1, reduction="mean"):
         super().__init__()

@@ -69,6 +69,8 @@ ReductionType GetReductionByName(std::string strReduction) {
     return MeanReduction;
   else if (strReduction == "sum")
     return SumReduction;
+  else if (strReduction == "batch")
+    return BatchDiceReduction;
 
   return UnknownReduction;
 }
@@ -95,24 +97,18 @@ torch::Tensor diceloss_cpu_forward(torch::Tensor inData, torch::Tensor inMask, i
   
   auto clOptions = torch::TensorOptions().dtype(inData.dtype()).device(inData.device());
 
-  torch::Tensor outLoss = torch::zeros({ i64BatchSize }, clOptions);
-
   const RealType * const p_inData = inData.data_ptr<RealType>();
   const int64_t * const p_i64InMask = inMask.data_ptr<int64_t>();
-  RealType *p_outLoss = outLoss.data_ptr<RealType>();
 
-  torch::Tensor num = torch::empty({ i64NumChannels }, clOptions);
-  torch::Tensor den = torch::empty({ i64NumChannels }, clOptions);
+  torch::Tensor num = torch::zeros({ i64BatchSize, i64NumChannels }, clOptions);
+  torch::Tensor den = torch::zeros({ i64BatchSize, i64NumChannels }, clOptions);
   torch::Tensor values = torch::empty({ i64NumChannels }, clOptions);
 
-  RealType * const p_num = num.data_ptr<RealType>();
-  RealType * const p_den = den.data_ptr<RealType>();
+  RealType *p_num = num.data_ptr<RealType>();
+  RealType *p_den = den.data_ptr<RealType>();
   RealType * const p_values = values.data_ptr<RealType>();
 
   for (int64_t b = 0; b < i64BatchSize; ++b) {
-    num.fill_(RealType(0));
-    den.fill_(RealType(0));
-
     for (int64_t i = 0; i < i64InnerDataNum; ++i) {
       const int64_t i64Label = p_i64InMask[b*i64InnerDataNum + i];
 
@@ -132,28 +128,48 @@ torch::Tensor diceloss_cpu_forward(torch::Tensor inData, torch::Tensor inMask, i
 
         const RealType value = p_values[c];
         const RealType binaryLabel = RealType(i64Label == c ? 1 : 0);
-        p_num[c] += value*binaryLabel;
-        p_den[c] += std::pow(value, p) + binaryLabel; // No reason to calculate std::pow(binaryLabel, p)
+        p_num[b*i64NumChannels + c] += value*binaryLabel;
+        p_den[b*i64NumChannels + c] += std::pow(value, p) + binaryLabel; // No reason to calculate std::pow(binaryLabel, p)
       }
     }
+  }
 
+  if (eReduction == BatchDiceReduction) {
+    num = num.sum(IntArrayRef(0), true);
+    den = den.sum(IntArrayRef(0), true);
+
+    p_num = num.data_ptr<RealType>();
+    p_den = den.data_ptr<RealType>();
+  }
+
+  num *= RealType(2);
+  num += smooth;
+  den += smooth;
+
+  torch::Tensor outLoss = torch::zeros_like(num);
+  RealType *p_outLoss = outLoss.data_ptr<RealType>();
+
+  for (int64_t b = 0; b < outLoss.sizes()[0]; ++b) {
     for (int64_t c = 0; c < i64NumChannels; ++c) {
       if (c == i64IgnoreChannel)
         continue;
 
-      p_num[c] = RealType(2)*p_num[c] + smooth;
-      p_den[c] += smooth;
+      const RealType num = p_num[b*i64NumChannels + c];
+      const RealType den = p_den[b*i64NumChannels + c];
 
       // By definition: den >= num and we say DSC = 1 when comparing two empty sets (which are the same)
-      if (p_den[c] != RealType(0))
-        p_outLoss[b] += RealType(1) - p_num[c]/p_den[c];
+      if (den == RealType(0))
+        continue;
+ 
+      p_outLoss[b*i64NumChannels + c] = RealType(1) - num/den;
     }
-
-    p_outLoss[b] /= RealType(i64NumChannels);
   }
+
+  outLoss = outLoss.mean(IntArrayRef(1));
 
   switch (eReduction) {
   case NoneReduction:
+  case BatchDiceReduction: // Fall through
     return outLoss;
   case MeanReduction:
     return outLoss.mean();
@@ -194,6 +210,7 @@ std::vector<torch::Tensor> diceloss_cpu_backward(torch::Tensor inData, bool bInD
     break;
   case MeanReduction:
   case SumReduction: // Fall through
+  case BatchDiceReduction: // Fall through
     if (outLossGrad.numel() != 1)
       return std::vector<torch::Tensor>();
     break;
@@ -209,8 +226,8 @@ std::vector<torch::Tensor> diceloss_cpu_backward(torch::Tensor inData, bool bInD
 
   auto clOptions = torch::TensorOptions().dtype(inData.dtype()).device(inData.device());
 
-  torch::Tensor num = torch::empty({ i64NumChannels }, clOptions);
-  torch::Tensor den = torch::empty({ i64NumChannels }, clOptions);
+  torch::Tensor num = torch::zeros({ i64BatchSize, i64NumChannels }, clOptions);
+  torch::Tensor den = torch::zeros({ i64BatchSize, i64NumChannels }, clOptions);
   torch::Tensor values = torch::empty({ i64NumChannels }, clOptions);
 
   RealType * const p_num = num.data_ptr<RealType>();
@@ -222,25 +239,6 @@ std::vector<torch::Tensor> diceloss_cpu_backward(torch::Tensor inData, bool bInD
     RealType * const p_inDataGrad = inDataGrad.data_ptr<RealType>();
 
     for (int64_t b = 0; b < i64BatchSize; ++b) {
-      num.fill_(RealType(0));
-      den.fill_(RealType(0));
-
-      RealType scale = RealType(1);
-
-      switch (eReduction) {
-      case NoneReduction:
-        scale = p_outLossGrad[b] / RealType(i64NumChannels);
-        break;
-      case MeanReduction:
-        scale = *p_outLossGrad / RealType(i64NumChannels * i64BatchSize);
-        break;
-      case SumReduction:
-        scale = *p_outLossGrad / RealType(i64NumChannels);
-        break;
-      default:
-        break;
-      }
-
       for (int64_t i = 0; i < i64InnerDataNum; ++i) {
         const int64_t i64Label = p_i64InMask[b*i64InnerDataNum + i];
 
@@ -259,14 +257,49 @@ std::vector<torch::Tensor> diceloss_cpu_backward(torch::Tensor inData, bool bInD
             continue;
 
           const RealType binaryLabel = RealType(i64Label == c ? 1 : 0);
-          p_num[c] += p_values[c]*binaryLabel;
-          p_den[c] += std::pow(p_values[c], p) + binaryLabel; // No reason to calculate std::pow(binaryLabel, p)
+          p_num[b*i64NumChannels + c] += p_values[c]*binaryLabel;
+          p_den[b*i64NumChannels + c] += std::pow(p_values[c], p) + binaryLabel; // No reason to calculate std::pow(binaryLabel, p)
         }
       }
+    }
 
-      for (int64_t c = 0; c < i64NumChannels; ++c) {
-        p_num[c] = RealType(2)*p_num[c] + smooth;
-        p_den[c] += smooth;
+    if (eReduction == BatchDiceReduction) {
+      num = num.sum(IntArrayRef(0), true);
+      den = den.sum(IntArrayRef(0), true);
+
+      // XXX: These pointers are invalid!
+      //p_num = num.data_ptr<RealType>();
+      //p_den = den.data_ptr<RealType>();
+    }
+
+    num *= RealType(2);
+    num += smooth;
+    den += smooth;
+
+    for (int64_t b = 0; b < i64BatchSize; ++b) {
+      const RealType *p_num = num.data_ptr<RealType>();
+      const RealType *p_den = den.data_ptr<RealType>();
+
+      if (eReduction != BatchDiceReduction) {
+        p_num += b*i64NumChannels;
+        p_den += b*i64NumChannels;
+      }
+
+      RealType scale = RealType(1);
+
+      switch (eReduction) {
+      case NoneReduction:
+        scale = p_outLossGrad[b] / RealType(i64NumChannels);
+        break;
+      case MeanReduction:
+        scale = *p_outLossGrad / RealType(i64NumChannels * i64BatchSize);
+        break;
+      case SumReduction:
+      case BatchDiceReduction: // Fall through
+        scale = *p_outLossGrad / RealType(i64NumChannels);
+        break;
+      default:
+        break;
       }
 
       for (int64_t i = 0; i < i64InnerDataNum; ++i) {
