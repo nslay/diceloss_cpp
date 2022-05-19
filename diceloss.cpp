@@ -354,6 +354,14 @@ template<typename RealType>
 std::vector<torch::Tensor> diceloss_gpu_backward(torch::Tensor, bool, torch::Tensor, bool, torch::Tensor, int64_t, int64_t, const RealType &, int, ReductionType) {
   return std::vector<torch::Tensor>();
 }
+
+torch::Tensor diceloss_gpu_forward_half(torch::Tensor, torch::Tensor, int64_t, int64_t, float, int, ReductionType) {
+  return torch::Tensor();
+}
+
+std::vector<torch::Tensor> diceloss_gpu_backward_half(torch::Tensor, bool, torch::Tensor, bool, torch::Tensor, int64_t, int64_t, float, int, ReductionType) {
+  return std::vector<torch::Tensor>();
+}
 #endif // !WITH_CUDA
 
 torch::Tensor diceloss_forward(torch::Tensor inData, torch::Tensor inMask, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, double dSmooth, int p, const std::string &strReduction) {
