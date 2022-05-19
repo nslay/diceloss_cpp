@@ -23,7 +23,9 @@
 #ifndef DICELOSS_H
 #define DICELOSS_H
 
+#include <vector>
 #include <string>
+#include "torch/extension.h"
 
 // This enum is the ONLY reason this file exists!
 enum ReductionType { UnknownReduction = -1, NoneReduction, MeanReduction, SumReduction, BatchDiceReduction };
@@ -41,6 +43,10 @@ torch::Tensor diceloss_gpu_forward(torch::Tensor inData, torch::Tensor inMask, i
 
 template<typename RealType>
 std::vector<torch::Tensor> diceloss_gpu_backward(torch::Tensor inData, bool bInDataGrad, torch::Tensor inMask, bool bInMaskGrad, torch::Tensor outLossGrad, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, const RealType &smooth, int p, ReductionType eReduction);
+
+torch::Tensor diceloss_gpu_forward_half(torch::Tensor inData, torch::Tensor inMask, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, float smooth, int p, ReductionType eReduction);
+
+std::vector<torch::Tensor> diceloss_gpu_backward_half(torch::Tensor inData, bool bInDataGrad, torch::Tensor inMask, bool bInMaskGrad, torch::Tensor outLossGrad, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, float smooth, int p, ReductionType eReduction);
 
 #endif // !DICELOSS_H
 

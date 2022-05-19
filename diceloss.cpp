@@ -374,6 +374,14 @@ torch::Tensor diceloss_forward(torch::Tensor inData, torch::Tensor inMask, int64
   c10::DeviceGuard clGuard(inData.device());
 
   switch (inData.scalar_type()) {
+  case torch::kFloat16:
+    {
+      if (inData.is_cuda())
+        return diceloss_gpu_forward_half(inData, inMask, i64IgnoreChannel, i64IgnoreLabel, (float)dSmooth, p, eReduction);
+      else
+        return torch::Tensor(); // Not implemented yet
+    }
+    break;
   case torch::kFloat32:
     {
       if (inData.is_cuda())
@@ -398,7 +406,7 @@ torch::Tensor diceloss_forward(torch::Tensor inData, torch::Tensor inMask, int64
 }
 
 std::vector<torch::Tensor> diceloss_backward(torch::Tensor inData, bool bInDataGrad, torch::Tensor inMask, bool bInMaskGrad, torch::Tensor outLossGrad, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, double dSmooth, int p, const std::string &strReduction) {
-  if (inData.dtype() != outLossGrad.dtype() || inMask.scalar_type() != torch::kInt64)
+  if (inMask.scalar_type() != torch::kInt64)
     return std::vector<torch::Tensor>();
 
   if (inData.device() != inMask.device() || inData.device() != outLossGrad.device())
@@ -415,8 +423,22 @@ std::vector<torch::Tensor> diceloss_backward(torch::Tensor inData, bool bInDataG
   c10::DeviceGuard clGuard(inData.device());
 
   switch (inData.scalar_type()) {
+  case torch::kFloat16:
+    {
+      if (outLossGrad.scalar_type() != torch::kFloat32)
+        return std::vector<torch::Tensor>(); 
+      
+      if (inData.is_cuda())
+        return diceloss_gpu_backward_half(inData, bInDataGrad, inMask, bInMaskGrad, outLossGrad, i64IgnoreChannel, i64IgnoreLabel, (float)dSmooth, p, eReduction);
+      else
+        return std::vector<torch::Tensor>(); // Not implemented yet
+    }
+    break;
   case torch::kFloat32:
     {
+      if (inData.dtype() != outLossGrad.dtype())
+        return std::vector<torch::Tensor>(); 
+
       if (inData.is_cuda())
         return diceloss_gpu_backward<float>(inData, bInDataGrad, inMask, bInMaskGrad, outLossGrad, i64IgnoreChannel, i64IgnoreLabel, (float)dSmooth, p, eReduction);
       else
@@ -425,6 +447,9 @@ std::vector<torch::Tensor> diceloss_backward(torch::Tensor inData, bool bInDataG
     break;
   case torch::kFloat64:
     {
+      if (inData.dtype() != outLossGrad.dtype())
+        return std::vector<torch::Tensor>(); 
+
       if (inData.is_cuda())
         return diceloss_gpu_backward<double>(inData, bInDataGrad, inMask, bInMaskGrad, outLossGrad, i64IgnoreChannel, i64IgnoreLabel, dSmooth, p, eReduction);
       else
