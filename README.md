@@ -30,8 +30,10 @@ loss.backward()
 **NOTE**: `p` must be an integer.
 
 ## Inputs
-* `x` -- [ BatchSize, Channels, d1, d2, ... ] (torch.float32 or torch.float64)
+* `x` -- [ BatchSize, Channels, d1, d2, ... ] (torch.float16, torch.float32 or torch.float64)
 * `y`-- [ BatchSize, d1, d2, ... ] (torch.long)
+
+**NOTE**: torch.float16 only supported on GPU.
 
 ## Outputs
 * `reduction` = "mean"/"sum"/"batch" -- scalar
