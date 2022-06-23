@@ -20,7 +20,7 @@ Once compiled and installed, you should be able to do something like this:
 ```py
 from DiceLoss import DiceLoss
 
-dice = DiceLoss(ignore_channel = -1, ignore_label = -1, smooth = 0, p = 1, reduction = "mean")
+dice = DiceLoss(weight=None, ignore_channel = -1, ignore_label = -1, smooth = 0, p = 1, reduction = "mean")
 x = torch.rand([8, 5, 100, 100, 100]).cuda()
 y = torch.randint(size=[8, 100, 100, 100], low=0, high=6).type(torch.long).cuda()
 
@@ -38,6 +38,9 @@ loss.backward()
 ## Outputs
 * `reduction` = "mean"/"sum"/"batch" -- scalar
 * `reduction` = "none" -- [ BatchSize ]
+
+## `weight`
+Instead of averaging the binary dice losses, use this `torch.Tensor` to weight each corresponding binary dice loss. Using `weight=torch.Tensor([1.0/K, 1.0/K, ..., 1.0/K])` is equivalent to the default behavior.
 
 ## `ignore_channel`
 This ignores computing the binary dice loss along one of the input channels. If `ignore_channel` is not one of the integers in the range [0, Channels), then this option has no effect on dice loss calculation (binary dice loss will be calculated along all channels). Binary dice loss for other channels will be computed normally even when encountering mask labels of `ignore_channel`. This is useful for ignoring the background label.
