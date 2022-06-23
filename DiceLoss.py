@@ -32,11 +32,11 @@ def _is_deterministic():
 
 class _DiceLoss(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, inData, inMask, ignoreChannel, ignoreLabel, smooth, p, reduction):
+    def forward(ctx, inData, inMask, inWeight, ignoreChannel, ignoreLabel, smooth, p, reduction):
         if _is_deterministic() and inData.device.type != "cpu":
             raise RuntimeError("No deterministic implementation of diceloss forward on GPUs.")
 
-        ctx.save_for_backward(inData, inMask)
+        ctx.save_for_backward(inData, inMask, inWeight)
 
         ctx.ignoreChannel = ignoreChannel
         ctx.ignoreLabel = ignoreLabel
@@ -44,28 +44,32 @@ class _DiceLoss(torch.autograd.Function):
         ctx.p = p
         ctx.reduction = reduction
 
-        return diceloss_cpp.diceloss_forward(inData.contiguous(), inMask.contiguous(), ctx.ignoreChannel, ctx.ignoreLabel, ctx.smooth, ctx.p, ctx.reduction)
+        return diceloss_cpp.diceloss_forward(inData.contiguous(), inMask.contiguous(), inWeight.contiguous(), ctx.ignoreChannel, ctx.ignoreLabel, ctx.smooth, ctx.p, ctx.reduction)
 
     @staticmethod
     def backward(ctx, outLossGrad):
         if _is_deterministic() and outLossGrad.device.type != "cpu":
             raise RuntimeError("No deterministic implementation of backpropagation of diceloss on GPUs.")
 
-        inData, inMask = ctx.saved_tensors
+        inData, inMask, inWeight = ctx.saved_tensors
 
-        inDataGrad, inMaskGrad = diceloss_cpp.diceloss_backward(inData.contiguous(), ctx.needs_input_grad[0], inMask.contiguous(), ctx.needs_input_grad[1], outLossGrad.contiguous(), ctx.ignoreChannel, ctx.ignoreLabel, ctx.smooth, ctx.p, ctx.reduction)
+        inDataGrad, inMaskGrad = diceloss_cpp.diceloss_backward(inData.contiguous(), ctx.needs_input_grad[0], inMask.contiguous(), ctx.needs_input_grad[1], inWeight.contiguous(), ctx.needs_input_grad[2], outLossGrad.contiguous(), ctx.ignoreChannel, ctx.ignoreLabel, ctx.smooth, ctx.p, ctx.reduction)
 
-        return inDataGrad, inMaskGrad, None, None, None, None, None
+        return inDataGrad, inMaskGrad, None, None, None, None, None, None
 
 class DiceLoss(nn.Module):
     supported_reductions = { "none", "mean", "sum", "batch" }
 
-    def __init__(self, ignore_channel=-1, ignore_label=-1, smooth=0, p=1, reduction="mean"):
+    def __init__(self, weight=None, ignore_channel=-1, ignore_label=-1, smooth=0, p=1, reduction="mean"):
         super().__init__()
 
         if reduction not in DiceLoss.supported_reductions:
             raise RuntimeError(f"Unsupported reduction '{reduction}'. Supported reductions are: {DiceLoss.supported_reductions}.")
 
+        if weight is None:
+            weight = torch.Tensor() # Having trouble passing None to C++ code expecting torch::Tensor or torch::OptionalTensorRef
+
+        self.register_buffer("weight", weight) # Copied from _WeightedLoss in pytorch
         self.ignore_channel = ignore_channel
         self.ignore_label = ignore_label
         self.smooth = smooth
@@ -73,5 +77,5 @@ class DiceLoss(nn.Module):
         self.reduction = reduction
 
     def forward(self, x, y):
-        return _DiceLoss.apply(x, y, self.ignore_channel, self.ignore_label, self.smooth, self.p, self.reduction)
+        return _DiceLoss.apply(x, y, self.weight, self.ignore_channel, self.ignore_label, self.smooth, self.p, self.reduction)
 

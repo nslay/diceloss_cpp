@@ -76,7 +76,7 @@ ReductionType GetReductionByName(std::string strReduction) {
 }
 
 template<typename RealType>
-torch::Tensor diceloss_cpu_forward(torch::Tensor inData, torch::Tensor inMask, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, const RealType &smooth, int p, ReductionType eReduction) {
+torch::Tensor diceloss_cpu_forward(torch::Tensor inData, torch::Tensor inMask, torch::Tensor inWeight, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, const RealType &smooth, int p, ReductionType eReduction) {
   // NOTE: kInt64 should match torch.long
   if (inData.dim() < 2 || inData.dim() != inMask.dim()+1 || inMask.scalar_type() != torch::kInt64)
     return torch::Tensor();
@@ -84,9 +84,11 @@ torch::Tensor diceloss_cpu_forward(torch::Tensor inData, torch::Tensor inMask, i
   if (inData.sizes()[0] != inMask.sizes()[0] || inData.sizes().slice(2) != inMask.sizes().slice(1))
     return torch::Tensor();
 
-
   const int64_t i64BatchSize = inData.sizes()[0];
   const int64_t i64NumChannels = inData.sizes()[1];
+
+  if (inWeight.numel() > 0 && (inWeight.dim() != 1 || inWeight.numel() != i64NumChannels))
+    return torch::Tensor();
 
   int64_t i64InnerDataNum = 1;
 
@@ -165,7 +167,12 @@ torch::Tensor diceloss_cpu_forward(torch::Tensor inData, torch::Tensor inMask, i
     }
   }
 
-  outLoss = outLoss.mean(IntArrayRef(1));
+  if (inWeight.numel() > 0) {
+    outLoss *= inWeight;
+    outLoss = outLoss.sum(IntArrayRef(1));
+  }
+  else
+    outLoss = outLoss.mean(IntArrayRef(1));
 
   switch (eReduction) {
   case NoneReduction:
@@ -183,8 +190,8 @@ torch::Tensor diceloss_cpu_forward(torch::Tensor inData, torch::Tensor inMask, i
 }
 
 template<typename RealType>
-std::vector<torch::Tensor> diceloss_cpu_backward(torch::Tensor inData, bool bInDataGrad, torch::Tensor inMask, bool bInMaskGrad, torch::Tensor outLossGrad, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, const RealType &smooth, int p, ReductionType eReduction) {
-  if (bInMaskGrad) // This is never differentiable!
+std::vector<torch::Tensor> diceloss_cpu_backward(torch::Tensor inData, bool bInDataGrad, torch::Tensor inMask, bool bInMaskGrad, torch::Tensor inWeight, bool bInWeightGrad, torch::Tensor outLossGrad, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, const RealType &smooth, int p, ReductionType eReduction) {
+  if (bInMaskGrad || bInWeightGrad) // These are never differentiable!
     return std::vector<torch::Tensor>(); 
 
   if (inData.dim() < 2 || inData.dim() != inMask.dim()+1 || inMask.scalar_type() != torch::kInt64)
@@ -195,6 +202,9 @@ std::vector<torch::Tensor> diceloss_cpu_backward(torch::Tensor inData, bool bInD
 
   const int64_t i64BatchSize = inData.sizes()[0];
   const int64_t i64NumChannels = inData.sizes()[1];
+
+  if (inWeight.numel() > 0 && (inWeight.dim() != 1 || inWeight.numel() != i64NumChannels))
+    return std::vector<torch::Tensor>();
 
   int64_t i64InnerDataNum = 1;
 
@@ -222,6 +232,7 @@ std::vector<torch::Tensor> diceloss_cpu_backward(torch::Tensor inData, bool bInD
 
   const RealType * const p_inData = inData.data_ptr<RealType>();
   const int64_t * const p_i64InMask = inMask.data_ptr<int64_t>();
+  const RealType * const p_inWeight = inWeight.numel() > 0 ? inWeight.data_ptr<RealType>() : nullptr;
   RealType * const p_outLossGrad = outLossGrad.data_ptr<RealType>();
 
   auto clOptions = torch::TensorOptions().dtype(inData.dtype()).device(inData.device());
@@ -289,14 +300,14 @@ std::vector<torch::Tensor> diceloss_cpu_backward(torch::Tensor inData, bool bInD
 
       switch (eReduction) {
       case NoneReduction:
-        scale = p_outLossGrad[b] / RealType(i64NumChannels);
+        scale = p_outLossGrad[b];
         break;
       case MeanReduction:
-        scale = *p_outLossGrad / RealType(i64NumChannels * i64BatchSize);
+        scale = *p_outLossGrad / RealType(i64BatchSize);
         break;
       case SumReduction:
       case BatchDiceReduction: // Fall through
-        scale = *p_outLossGrad / RealType(i64NumChannels);
+        scale = *p_outLossGrad;
         break;
       default:
         break;
@@ -311,6 +322,8 @@ std::vector<torch::Tensor> diceloss_cpu_backward(torch::Tensor inData, bool bInD
         softmax(p_values, p_inData + (b*i64NumChannels + 0)*i64InnerDataNum + i, i64NumChannels, i64InnerDataNum);
 
         for (int64_t c = 0; c < i64NumChannels; ++c) {
+          const RealType weight = p_inWeight != nullptr ? p_inWeight[c] : RealType(1)/RealType(i64NumChannels);
+
           // NOTE:  Owing to the Jacobian multiplication, we can't ignore c == ignore_channel here!
           for (int64_t c2 = 0; c2 < i64NumChannels; ++c2) {
             if (c2 == i64IgnoreChannel) // This loss term is discarded (constant), so the partial = 0 for this term
@@ -333,7 +346,7 @@ std::vector<torch::Tensor> diceloss_cpu_backward(torch::Tensor inData, bool bInD
             }
           }
 
-          p_inDataGrad[(b*i64NumChannels + c)*i64InnerDataNum + i] *= scale * p_values[c];
+          p_inDataGrad[(b*i64NumChannels + c)*i64InnerDataNum + i] *= scale * weight * p_values[c];
         }
       }
     }
@@ -346,32 +359,38 @@ std::vector<torch::Tensor> diceloss_cpu_backward(torch::Tensor inData, bool bInD
 
 #ifndef WITH_CUDA
 template<typename RealType>
-torch::Tensor diceloss_gpu_forward(torch::Tensor, torch::Tensor, int64_t, int64_t, const RealType &, int, ReductionType) {
+torch::Tensor diceloss_gpu_forward(torch::Tensor, torch::Tensor, torch::Tensor, int64_t, int64_t, const RealType &, int, ReductionType) {
   return torch::Tensor();
 }
 
 template<typename RealType>
-std::vector<torch::Tensor> diceloss_gpu_backward(torch::Tensor, bool, torch::Tensor, bool, torch::Tensor, int64_t, int64_t, const RealType &, int, ReductionType) {
+std::vector<torch::Tensor> diceloss_gpu_backward(torch::Tensor, bool, torch::Tensor, bool, torch::Tensor, bool, torch::Tensor, int64_t, int64_t, const RealType &, int, ReductionType) {
   return std::vector<torch::Tensor>();
 }
 
-torch::Tensor diceloss_gpu_forward_half(torch::Tensor, torch::Tensor, int64_t, int64_t, float, int, ReductionType) {
+torch::Tensor diceloss_gpu_forward_half(torch::Tensor, torch::Tensor, torch::Tensor, int64_t, int64_t, float, int, ReductionType) {
   return torch::Tensor();
 }
 
-std::vector<torch::Tensor> diceloss_gpu_backward_half(torch::Tensor, bool, torch::Tensor, bool, torch::Tensor, int64_t, int64_t, float, int, ReductionType) {
+std::vector<torch::Tensor> diceloss_gpu_backward_half(torch::Tensor, bool, torch::Tensor, bool, torch::Tensor, bool, torch::Tensor, int64_t, int64_t, float, int, ReductionType) {
   return std::vector<torch::Tensor>();
 }
 #endif // !WITH_CUDA
 
-torch::Tensor diceloss_forward(torch::Tensor inData, torch::Tensor inMask, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, double dSmooth, int p, const std::string &strReduction) {
+torch::Tensor diceloss_forward(torch::Tensor inData, torch::Tensor inMask, torch::Tensor inWeight, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, double dSmooth, int p, const std::string &strReduction) {
   if (inMask.scalar_type() != torch::kInt64)
     return torch::Tensor();
 
   if (inData.device() != inMask.device())
     return torch::Tensor(); 
 
+  if (inWeight.numel() > 0 && inData.device() != inWeight.device())
+    return torch::Tensor();
+
   if (!inData.is_contiguous() || !inMask.is_contiguous())
+    return torch::Tensor();
+
+  if (inWeight.numel() > 0 && !inWeight.is_contiguous())
     return torch::Tensor();
 
   const ReductionType eReduction = GetReductionByName(strReduction);
@@ -384,26 +403,35 @@ torch::Tensor diceloss_forward(torch::Tensor inData, torch::Tensor inMask, int64
   switch (inData.scalar_type()) {
   case torch::kFloat16:
     {
+      if (inWeight.numel() > 0 && inWeight.scalar_type() != torch::kFloat32)
+        return torch::Tensor();
+
       if (inData.is_cuda())
-        return diceloss_gpu_forward_half(inData, inMask, i64IgnoreChannel, i64IgnoreLabel, (float)dSmooth, p, eReduction);
+        return diceloss_gpu_forward_half(inData, inMask, inWeight, i64IgnoreChannel, i64IgnoreLabel, (float)dSmooth, p, eReduction);
       else
         return torch::Tensor(); // Not implemented yet
     }
     break;
   case torch::kFloat32:
     {
+      if (inWeight.numel() > 0 && inWeight.dtype() != inData.dtype())
+        return torch::Tensor();
+
       if (inData.is_cuda())
-        return diceloss_gpu_forward<float>(inData, inMask, i64IgnoreChannel, i64IgnoreLabel, (float)dSmooth, p, eReduction);
+        return diceloss_gpu_forward<float>(inData, inMask, inWeight, i64IgnoreChannel, i64IgnoreLabel, (float)dSmooth, p, eReduction);
       else
-        return diceloss_cpu_forward<float>(inData, inMask, i64IgnoreChannel, i64IgnoreLabel, (float)dSmooth, p, eReduction);
+        return diceloss_cpu_forward<float>(inData, inMask, inWeight, i64IgnoreChannel, i64IgnoreLabel, (float)dSmooth, p, eReduction);
     }
     break;
   case torch::kFloat64:
     {
+      if (inWeight.numel() > 0 && inWeight.dtype() != inData.dtype())
+        return torch::Tensor();
+
       if (inData.is_cuda())
-        return diceloss_gpu_forward<double>(inData, inMask, i64IgnoreChannel, i64IgnoreLabel, dSmooth, p, eReduction);
+        return diceloss_gpu_forward<double>(inData, inMask, inWeight, i64IgnoreChannel, i64IgnoreLabel, dSmooth, p, eReduction);
       else
-        return diceloss_cpu_forward<double>(inData, inMask, i64IgnoreChannel, i64IgnoreLabel, dSmooth, p, eReduction);
+        return diceloss_cpu_forward<double>(inData, inMask, inWeight, i64IgnoreChannel, i64IgnoreLabel, dSmooth, p, eReduction);
     }
     break;
   default:
@@ -413,14 +441,20 @@ torch::Tensor diceloss_forward(torch::Tensor inData, torch::Tensor inMask, int64
   return torch::Tensor(); // Not reached
 }
 
-std::vector<torch::Tensor> diceloss_backward(torch::Tensor inData, bool bInDataGrad, torch::Tensor inMask, bool bInMaskGrad, torch::Tensor outLossGrad, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, double dSmooth, int p, const std::string &strReduction) {
+std::vector<torch::Tensor> diceloss_backward(torch::Tensor inData, bool bInDataGrad, torch::Tensor inMask, bool bInMaskGrad, torch::Tensor inWeight, bool bInWeightGrad, torch::Tensor outLossGrad, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, double dSmooth, int p, const std::string &strReduction) {
   if (inMask.scalar_type() != torch::kInt64)
     return std::vector<torch::Tensor>();
 
   if (inData.device() != inMask.device() || inData.device() != outLossGrad.device())
     return std::vector<torch::Tensor>();
 
+  if (inWeight.numel() > 0 && inData.device() != inWeight.device())
+    return std::vector<torch::Tensor>();
+
   if (!inData.is_contiguous() || !inMask.is_contiguous() || !outLossGrad.is_contiguous())
+    return std::vector<torch::Tensor>();
+
+  if (inWeight.numel() > 0 && !inWeight.is_contiguous())
     return std::vector<torch::Tensor>();
 
   const ReductionType eReduction = GetReductionByName(strReduction);
@@ -433,11 +467,14 @@ std::vector<torch::Tensor> diceloss_backward(torch::Tensor inData, bool bInDataG
   switch (inData.scalar_type()) {
   case torch::kFloat16:
     {
+      if (inWeight.numel() > 0 && inWeight.scalar_type() != torch::kFloat32)
+        return std::vector<torch::Tensor>(); 
+
       if (outLossGrad.scalar_type() != torch::kFloat32)
         return std::vector<torch::Tensor>(); 
       
       if (inData.is_cuda())
-        return diceloss_gpu_backward_half(inData, bInDataGrad, inMask, bInMaskGrad, outLossGrad, i64IgnoreChannel, i64IgnoreLabel, (float)dSmooth, p, eReduction);
+        return diceloss_gpu_backward_half(inData, bInDataGrad, inMask, bInMaskGrad, inWeight, bInWeightGrad, outLossGrad, i64IgnoreChannel, i64IgnoreLabel, (float)dSmooth, p, eReduction);
       else
         return std::vector<torch::Tensor>(); // Not implemented yet
     }
@@ -447,10 +484,13 @@ std::vector<torch::Tensor> diceloss_backward(torch::Tensor inData, bool bInDataG
       if (inData.dtype() != outLossGrad.dtype())
         return std::vector<torch::Tensor>(); 
 
+      if (inWeight.numel() > 0 && inWeight.dtype() != inData.dtype())
+        return std::vector<torch::Tensor>(); 
+
       if (inData.is_cuda())
-        return diceloss_gpu_backward<float>(inData, bInDataGrad, inMask, bInMaskGrad, outLossGrad, i64IgnoreChannel, i64IgnoreLabel, (float)dSmooth, p, eReduction);
+        return diceloss_gpu_backward<float>(inData, bInDataGrad, inMask, bInMaskGrad, inWeight, bInWeightGrad, outLossGrad, i64IgnoreChannel, i64IgnoreLabel, (float)dSmooth, p, eReduction);
       else
-        return diceloss_cpu_backward<float>(inData, bInDataGrad, inMask, bInMaskGrad, outLossGrad, i64IgnoreChannel, i64IgnoreLabel, (float)dSmooth, p, eReduction);
+        return diceloss_cpu_backward<float>(inData, bInDataGrad, inMask, bInMaskGrad, inWeight, bInWeightGrad, outLossGrad, i64IgnoreChannel, i64IgnoreLabel, (float)dSmooth, p, eReduction);
     }
     break;
   case torch::kFloat64:
@@ -458,10 +498,13 @@ std::vector<torch::Tensor> diceloss_backward(torch::Tensor inData, bool bInDataG
       if (inData.dtype() != outLossGrad.dtype())
         return std::vector<torch::Tensor>(); 
 
+      if (inWeight.numel() > 0 && inWeight.dtype() != inData.dtype())
+        return std::vector<torch::Tensor>(); 
+
       if (inData.is_cuda())
-        return diceloss_gpu_backward<double>(inData, bInDataGrad, inMask, bInMaskGrad, outLossGrad, i64IgnoreChannel, i64IgnoreLabel, dSmooth, p, eReduction);
+        return diceloss_gpu_backward<double>(inData, bInDataGrad, inMask, bInMaskGrad, inWeight, bInWeightGrad, outLossGrad, i64IgnoreChannel, i64IgnoreLabel, dSmooth, p, eReduction);
       else
-        return diceloss_cpu_backward<double>(inData, bInDataGrad, inMask, bInMaskGrad, outLossGrad, i64IgnoreChannel, i64IgnoreLabel, dSmooth, p, eReduction);
+        return diceloss_cpu_backward<double>(inData, bInDataGrad, inMask, bInMaskGrad, inWeight, bInWeightGrad, outLossGrad, i64IgnoreChannel, i64IgnoreLabel, dSmooth, p, eReduction);
     }
     break;
   default:

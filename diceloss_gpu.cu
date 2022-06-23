@@ -286,7 +286,7 @@ __global__ void DiceLossForwardKernel2(const RealType *d_num, const RealType *d_
 }
 
 template<typename RealType>
-__global__ void DiceLossBackwardKernelData(const RealType *d_inData, const int64_t *d_i64InMask, const RealType *d_num, const RealType *d_den, const RealType *d_outLossGrad, RealType *d_inDataGrad, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, int p, ReductionType eReduction, int64_t i64BatchSize, int64_t i64NumChannels, int64_t i64InnerDataNum) {
+__global__ void DiceLossBackwardKernelData(const RealType *d_inData, const int64_t *d_i64InMask, const RealType *d_inWeight, const RealType *d_num, const RealType *d_den, const RealType *d_outLossGrad, RealType *d_inDataGrad, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, int p, ReductionType eReduction, int64_t i64BatchSize, int64_t i64NumChannels, int64_t i64InnerDataNum) {
   // Workaround shared memory limitation in template functions... as described here:
   // https://stackoverflow.com/questions/20497209/getting-cuda-error-declaration-is-incompatible-with-previous-variable-name
   extern __shared__ uint8_t s[]; // Yes, would have been nice to have it as RealType s[]...
@@ -307,14 +307,14 @@ __global__ void DiceLossBackwardKernelData(const RealType *d_inData, const int64
 
     switch (eReduction) {
     case NoneReduction:
-      scale = d_outLossGrad[b] / RealType(i64NumChannels);
+      scale = d_outLossGrad[b];
       break;
     case MeanReduction:
-      scale = *d_outLossGrad / RealType(i64NumChannels * i64BatchSize);
+      scale = *d_outLossGrad / RealType(i64BatchSize);
       break;
     case SumReduction:
     case BatchDiceReduction: // Fall through
-      scale = *d_outLossGrad / RealType(i64NumChannels);
+      scale = *d_outLossGrad;
       break;
     default:
       break;
@@ -328,6 +328,8 @@ __global__ void DiceLossBackwardKernelData(const RealType *d_inData, const int64
     softmax(d_values, d_inData + (b*i64NumChannels + 0)*i64InnerDataNum + i, i64NumChannels, i64InnerDataNum);
 
     for (int64_t c = 0; c < i64NumChannels; ++c) {
+      const RealType weight = d_inWeight != nullptr ? d_inWeight[c] : RealType(1)/RealType(i64NumChannels);
+
       // NOTE:  Owing to the Jacobian multiplication, we can't ignore c == ignore_channel here!
       RealType tmp = RealType(0);
       for (int64_t c2 = 0; c2 < i64NumChannels; ++c2) {
@@ -354,13 +356,13 @@ __global__ void DiceLossBackwardKernelData(const RealType *d_inData, const int64
         }
       }
 
-      tmp *= scale * d_values[c];
+      tmp *= scale * weight * d_values[c];
       d_inDataGrad[(b*i64NumChannels + c)*i64InnerDataNum + i] = tmp;
     }
   }
 }
 
-__global__ void DiceLossBackwardKernelDataHalf(const __half *d_inData, const int64_t *d_i64InMask, const float *d_num, const float *d_den, const float *d_outLossGrad, __half *d_inDataGrad, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, int p, ReductionType eReduction, int64_t i64BatchSize, int64_t i64NumChannels, int64_t i64InnerDataNum) {
+__global__ void DiceLossBackwardKernelDataHalf(const __half *d_inData, const int64_t *d_i64InMask, const float *d_inWeight, const float *d_num, const float *d_den, const float *d_outLossGrad, __half *d_inDataGrad, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, int p, ReductionType eReduction, int64_t i64BatchSize, int64_t i64NumChannels, int64_t i64InnerDataNum) {
   extern __shared__ uint8_t s[]; 
 
   const int64_t b = (int64_t)blockIdx.y * blockDim.y + threadIdx.y;
@@ -379,14 +381,14 @@ __global__ void DiceLossBackwardKernelDataHalf(const __half *d_inData, const int
 
     switch (eReduction) {
     case NoneReduction:
-      scale = d_outLossGrad[b] / (float)i64NumChannels;
+      scale = d_outLossGrad[b];
       break;
     case MeanReduction:
-      scale = *d_outLossGrad / (float)(i64NumChannels * i64BatchSize);
+      scale = *d_outLossGrad / (float)(i64BatchSize);
       break;
     case SumReduction:
     case BatchDiceReduction: // Fall through
-      scale = *d_outLossGrad / (float)i64NumChannels;
+      scale = *d_outLossGrad;
       break;
     default:
       break;
@@ -400,6 +402,8 @@ __global__ void DiceLossBackwardKernelDataHalf(const __half *d_inData, const int
     softmax(d_values, d_inData + (b*i64NumChannels + 0)*i64InnerDataNum + i, i64NumChannels, i64InnerDataNum);
 
     for (int64_t c = 0; c < i64NumChannels; ++c) {
+      const float weight = d_inWeight != nullptr ? d_inWeight[c] : 1.0f/(float)i64NumChannels;
+
       float tmp = 0.0f;
       for (int64_t c2 = 0; c2 < i64NumChannels; ++c2) {
         // NOTE: num and den may overflow __half, we just do this computation in 32 bits
@@ -426,7 +430,7 @@ __global__ void DiceLossBackwardKernelDataHalf(const __half *d_inData, const int
         }
       }
 
-      tmp *= scale * __half2float(d_values[c]);
+      tmp *= scale * weight * __half2float(d_values[c]);
       d_inDataGrad[(b*i64NumChannels + c)*i64InnerDataNum + i] = __float2half(tmp);
     }
   }
@@ -435,7 +439,7 @@ __global__ void DiceLossBackwardKernelDataHalf(const __half *d_inData, const int
 } // end anonymous namespace
 
 template<typename RealType>
-torch::Tensor diceloss_gpu_forward(torch::Tensor inData, torch::Tensor inMask, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, const RealType &smooth, int p, ReductionType eReduction) {
+torch::Tensor diceloss_gpu_forward(torch::Tensor inData, torch::Tensor inMask, torch::Tensor inWeight, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, const RealType &smooth, int p, ReductionType eReduction) {
   // NOTE: kInt64 should match torch.long
   if (inData.dim() < 2 || inData.dim() != inMask.dim()+1 || inMask.scalar_type() != torch::kInt64)
     return torch::Tensor();
@@ -446,6 +450,9 @@ torch::Tensor diceloss_gpu_forward(torch::Tensor inData, torch::Tensor inMask, i
 
   const int64_t i64BatchSize = inData.sizes()[0];
   const int64_t i64NumChannels = inData.sizes()[1];
+
+  if (inWeight.numel() > 0 && (inWeight.dim() != 1 || inWeight.numel() != i64NumChannels))
+    return torch::Tensor();
 
   int64_t i64InnerDataNum = 1;
 
@@ -503,8 +510,12 @@ torch::Tensor diceloss_gpu_forward(torch::Tensor inData, torch::Tensor inMask, i
     DiceLossForwardKernel2<RealType><<<numBlocks, threadsPerBlock>>>(d_num, d_den, d_outLoss, outLoss.sizes()[0], i64NumChannels);
   }
 
-  //torch::Tensor outLoss = RealType(1) - (RealType(2)*num + smooth)/(den + smooth);
-  outLoss = outLoss.mean(IntArrayRef(1));
+  if (inWeight.numel() > 0) {
+    outLoss *= inWeight;
+    outLoss = outLoss.sum(IntArrayRef(1));
+  }
+  else
+    outLoss = outLoss.mean(IntArrayRef(1));
 
   switch (eReduction) {
   case NoneReduction:
@@ -522,8 +533,8 @@ torch::Tensor diceloss_gpu_forward(torch::Tensor inData, torch::Tensor inMask, i
 }
 
 template<typename RealType>
-std::vector<torch::Tensor> diceloss_gpu_backward(torch::Tensor inData, bool bInDataGrad, torch::Tensor inMask, bool bInMaskGrad, torch::Tensor outLossGrad, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, const RealType &smooth, int p, ReductionType eReduction) {
-  if (bInMaskGrad) // This is never differentiable!
+std::vector<torch::Tensor> diceloss_gpu_backward(torch::Tensor inData, bool bInDataGrad, torch::Tensor inMask, bool bInMaskGrad, torch::Tensor inWeight, bool bInWeightGrad, torch::Tensor outLossGrad, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, const RealType &smooth, int p, ReductionType eReduction) {
+  if (bInMaskGrad || bInWeightGrad) // These are never differentiable!
     return std::vector<torch::Tensor>(); 
 
   if (inData.dim() < 2 || inData.dim() != inMask.dim()+1 || inMask.scalar_type() != torch::kInt64)
@@ -534,6 +545,9 @@ std::vector<torch::Tensor> diceloss_gpu_backward(torch::Tensor inData, bool bInD
 
   const int64_t i64BatchSize = inData.sizes()[0];
   const int64_t i64NumChannels = inData.sizes()[1];
+
+  if (inWeight.numel() > 0 && (inWeight.dim() != 1 || inWeight.numel() != i64NumChannels))
+    return std::vector<torch::Tensor>();
 
   int64_t i64InnerDataNum = 1;
 
@@ -571,6 +585,7 @@ std::vector<torch::Tensor> diceloss_gpu_backward(torch::Tensor inData, bool bInD
 
   const RealType * const d_inData = inData.data_ptr<RealType>();
   const int64_t * const d_i64InMask = inMask.data_ptr<int64_t>();
+  const RealType * const d_inWeight = inWeight.numel() > 0 ? inWeight.data_ptr<RealType>() : nullptr;
   const RealType * const d_outLossGrad = outLossGrad.data_ptr<RealType>();
 
   torch::Tensor invalidFound = torch::scalar_tensor(false, torch::TensorOptions().dtype(torch::kBool).device(inData.device()));
@@ -607,7 +622,7 @@ std::vector<torch::Tensor> diceloss_gpu_backward(torch::Tensor inData, bool bInD
     const RealType * const d_num = num.data_ptr<RealType>();
     const RealType * const d_den = den.data_ptr<RealType>();
 
-    DiceLossBackwardKernelData<RealType><<<numBlocks, threadsPerBlock, sharedMem>>>(d_inData, d_i64InMask, d_num, d_den, d_outLossGrad, d_inDataGrad, i64IgnoreChannel, i64IgnoreLabel, p, eReduction, i64BatchSize, i64NumChannels, i64InnerDataNum);
+    DiceLossBackwardKernelData<RealType><<<numBlocks, threadsPerBlock, sharedMem>>>(d_inData, d_i64InMask, d_inWeight, d_num, d_den, d_outLossGrad, d_inDataGrad, i64IgnoreChannel, i64IgnoreLabel, p, eReduction, i64BatchSize, i64NumChannels, i64InnerDataNum);
 
     vGradTensors[0] = inDataGrad;
   }
@@ -615,7 +630,7 @@ std::vector<torch::Tensor> diceloss_gpu_backward(torch::Tensor inData, bool bInD
   return vGradTensors;
 }
 
-torch::Tensor diceloss_gpu_forward_half(torch::Tensor inData, torch::Tensor inMask, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, float smooth, int p, ReductionType eReduction) {
+torch::Tensor diceloss_gpu_forward_half(torch::Tensor inData, torch::Tensor inMask, torch::Tensor inWeight, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, float smooth, int p, ReductionType eReduction) {
   // NOTE: kInt64 should match torch.long
   if (inData.dim() < 2 || inData.dim() != inMask.dim()+1 || inMask.scalar_type() != torch::kInt64)
     return torch::Tensor();
@@ -626,6 +641,9 @@ torch::Tensor diceloss_gpu_forward_half(torch::Tensor inData, torch::Tensor inMa
 
   const int64_t i64BatchSize = inData.sizes()[0];
   const int64_t i64NumChannels = inData.sizes()[1];
+
+  if (inWeight.numel() > 0 && (inWeight.dim() != 1 || inWeight.numel() != i64NumChannels))
+    return torch::Tensor();
 
   int64_t i64InnerDataNum = 1;
 
@@ -683,7 +701,12 @@ torch::Tensor diceloss_gpu_forward_half(torch::Tensor inData, torch::Tensor inMa
     DiceLossForwardKernel2<float><<<numBlocks, threadsPerBlock>>>(d_num, d_den, d_outLoss, outLoss.sizes()[0], i64NumChannels);
   }
 
-  outLoss = outLoss.mean(IntArrayRef(1));
+  if (inWeight.numel() > 0) {
+    outLoss *= inWeight;
+    outLoss = outLoss.sum(IntArrayRef(1));
+  }
+  else
+    outLoss = outLoss.mean(IntArrayRef(1));
 
   switch (eReduction) {
   case NoneReduction:
@@ -700,7 +723,7 @@ torch::Tensor diceloss_gpu_forward_half(torch::Tensor inData, torch::Tensor inMa
   return torch::Tensor(); // Not reached
 }
 
-std::vector<torch::Tensor> diceloss_gpu_backward_half(torch::Tensor inData, bool bInDataGrad, torch::Tensor inMask, bool bInMaskGrad, torch::Tensor outLossGrad, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, float smooth, int p, ReductionType eReduction) {
+std::vector<torch::Tensor> diceloss_gpu_backward_half(torch::Tensor inData, bool bInDataGrad, torch::Tensor inMask, bool bInMaskGrad, torch::Tensor inWeight, bool bInWeightGrad, torch::Tensor outLossGrad, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, float smooth, int p, ReductionType eReduction) {
   if (bInMaskGrad) // This is never differentiable!
     return std::vector<torch::Tensor>(); 
 
@@ -712,6 +735,9 @@ std::vector<torch::Tensor> diceloss_gpu_backward_half(torch::Tensor inData, bool
 
   const int64_t i64BatchSize = inData.sizes()[0];
   const int64_t i64NumChannels = inData.sizes()[1];
+
+  if (inWeight.numel() > 0 && (inWeight.dim() != 1 || inWeight.numel() != i64NumChannels))
+    return std::vector<torch::Tensor>();
 
   int64_t i64InnerDataNum = 1;
 
@@ -749,6 +775,7 @@ std::vector<torch::Tensor> diceloss_gpu_backward_half(torch::Tensor inData, bool
 
   const __half * const d_inData = (__half *)inData.data_ptr<torch::Half>();
   const int64_t * const d_i64InMask = inMask.data_ptr<int64_t>();
+  const float * const d_inWeight = inWeight.numel() > 0 ? inWeight.data_ptr<float>() : nullptr;
   const float * const d_outLossGrad = outLossGrad.data_ptr<float>();
 
   torch::Tensor invalidFound = torch::scalar_tensor(false, torch::TensorOptions().dtype(torch::kBool).device(inData.device()));
@@ -785,7 +812,7 @@ std::vector<torch::Tensor> diceloss_gpu_backward_half(torch::Tensor inData, bool
     const float * const d_num = num.data_ptr<float>();
     const float * const d_den = den.data_ptr<float>();
 
-    DiceLossBackwardKernelDataHalf<<<numBlocks, threadsPerBlock, sharedMem>>>(d_inData, d_i64InMask, d_num, d_den, d_outLossGrad, d_inDataGrad, i64IgnoreChannel, i64IgnoreLabel, p, eReduction, i64BatchSize, i64NumChannels, i64InnerDataNum);
+    DiceLossBackwardKernelDataHalf<<<numBlocks, threadsPerBlock, sharedMem>>>(d_inData, d_i64InMask, d_inWeight, d_num, d_den, d_outLossGrad, d_inDataGrad, i64IgnoreChannel, i64IgnoreLabel, p, eReduction, i64BatchSize, i64NumChannels, i64InnerDataNum);
 
     vGradTensors[0] = inDataGrad;
   }
@@ -793,9 +820,9 @@ std::vector<torch::Tensor> diceloss_gpu_backward_half(torch::Tensor inData, bool
   return vGradTensors;
 }
 
-template torch::Tensor diceloss_gpu_forward<float>(torch::Tensor, torch::Tensor, int64_t, int64_t i64IgnoreLabel, const float &, int, ReductionType);
-template torch::Tensor diceloss_gpu_forward<double>(torch::Tensor, torch::Tensor, int64_t, int64_t i64IgnoreLabel, const double &, int, ReductionType);
+template torch::Tensor diceloss_gpu_forward<float>(torch::Tensor, torch::Tensor, torch::Tensor, int64_t, int64_t i64IgnoreLabel, const float &, int, ReductionType);
+template torch::Tensor diceloss_gpu_forward<double>(torch::Tensor, torch::Tensor, torch::Tensor, int64_t, int64_t i64IgnoreLabel, const double &, int, ReductionType);
 
-template std::vector<torch::Tensor> diceloss_gpu_backward<float>(torch::Tensor, bool, torch::Tensor, bool, torch::Tensor, int64_t, int64_t, const float &, int, ReductionType);
-template std::vector<torch::Tensor> diceloss_gpu_backward<double>(torch::Tensor, bool, torch::Tensor, bool, torch::Tensor, int64_t, int64_t, const double &, int, ReductionType);
+template std::vector<torch::Tensor> diceloss_gpu_backward<float>(torch::Tensor, bool, torch::Tensor, bool, torch::Tensor, bool, torch::Tensor, int64_t, int64_t, const float &, int, ReductionType);
+template std::vector<torch::Tensor> diceloss_gpu_backward<double>(torch::Tensor, bool, torch::Tensor, bool, torch::Tensor, bool, torch::Tensor, int64_t, int64_t, const double &, int, ReductionType);
 
