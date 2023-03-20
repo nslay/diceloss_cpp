@@ -30,7 +30,6 @@
 #include <functional>
 
 #include "torch/extension.h"
-#include "caffe2/core/timer.h"
 #include "diceloss.h"
 
 typedef c10::IntArrayRef IntArrayRef;
