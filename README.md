@@ -4,7 +4,7 @@ Memory-efficient DiceLoss for PyTorch
 # Introduction
 Some of the dice loss implementations I've seen calculate softmax and one-hot encoded masks. This is not a big deal in 2D, but in 3D, this is extremely wasteful in memory. If you have batch size B and K classes, the one-hot mask will require B * K * H * W * D in memory and the softmax will require twice that (one for the gradient). So my workaround is to... not store one-hot encoded masks or softmax and instead calculate everything on the fly in the dice loss.
 
-The DiceLoss in this repository calculates the multi-class dice loss (average of binary dice losses over classes/channels) and fuses one-hot and softmax into the dice loss calculation so that you do not need to store one-hot encoded masks or softmax. Code for both CPU and GPU have been implemented and tested. It's almost certaintly not computationally optimal! But at least you can fit more on the GPU!
+The DiceLoss in this repository calculates the multi-class dice loss (average of binary dice losses over classes/channels) and fuses one-hot and softmax or sigmoid into the dice loss calculation so that you do not need to store one-hot encoded masks, softmax or sigmoid. Code for both CPU and GPU have been implemented and tested. It's almost certaintly not computationally optimal! But at least you can fit more on the GPU!
 
 This is still experimental. Beware of bugs! Though it's chewing through KITS19 data for me just fine!
 
@@ -35,6 +35,8 @@ loss.backward()
 
 **NOTE**: torch.float16 only supported on GPU.
 
+**NOTE**: If Channels=1 then the problem is assumed to be binary classification (i.e. K=2) and the single channel of input `x` corresponds to the foreground. The scores for foreground and background are computed using `sigmoid(x)` and `1-sigmoid(x)` respectively. This results in special handling of `weight` and `ignore_channel` options which can refer to background (y=0) and foreground (y=1) even though there is only a single input channel.
+
 ## Outputs
 * `reduction` = "mean"/"sum"/"batch" -- scalar
 * `reduction` = "none" -- [ BatchSize ]
@@ -42,8 +44,12 @@ loss.backward()
 ## `weight`
 Instead of averaging the binary dice losses, use this `torch.Tensor` to weight each corresponding binary dice loss. Using `weight=torch.Tensor([1.0/K, 1.0/K, ..., 1.0/K])` is equivalent to the default behavior.
 
+When Channels=1, `weight` should have two components where one component is for background (component=0) and the other is for foreground (component=1).
+
 ## `ignore_channel`
 This ignores computing the binary dice loss along one of the input channels. If `ignore_channel` is not one of the integers in the range [0, Channels), then this option has no effect on dice loss calculation (binary dice loss will be calculated along all channels). Binary dice loss for other channels will be computed normally even when encountering mask labels of `ignore_channel`. This is useful for ignoring the background label.
+
+When Channels=1, `ignore_channel=0` will ignore the background label (y=0) and `ignore_channel=1` will ignore the foreground label.
 
 ## `ignore_label`
 In contrast to `ignore_channel`, this ignores any computation related to **all** binary dice losses over all channels whenever the mask label is `ignore_label`. This is useful for ignoring *don't-care* or *unknown* regions of an image. There will be no loss or gradient contribution in regions of the mask with label `ignore_label`. The `ignore_label` can be any integer. If the mask has no `ignore_label` labels, this option has no effect on dice loss calculation.

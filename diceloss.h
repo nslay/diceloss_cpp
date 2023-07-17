@@ -33,18 +33,34 @@ enum ReductionType { UnknownReduction = -1, NoneReduction, MeanReduction, SumRed
 ReductionType GetReductionByName(std::string strReduction);
 
 template<typename RealType>
+torch::Tensor binarydiceloss_cpu_forward(torch::Tensor inData, torch::Tensor inMask, torch::Tensor inWeight, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, const RealType &smooth, int p, ReductionType eReduction);
+
+template<typename RealType>
 torch::Tensor diceloss_cpu_forward(torch::Tensor inData, torch::Tensor inMask, torch::Tensor inWeight, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, const RealType &smooth, int p, ReductionType eReduction);
+
+template<typename RealType>
+std::vector<torch::Tensor> binarydiceloss_cpu_backward(torch::Tensor inData, bool bInDataGrad, torch::Tensor inMask, bool bInMaskGrad, torch::Tensor inWeight, bool bInWeightGrad, torch::Tensor outLossGrad, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, const RealType &smooth, int p, ReductionType eReduction);
 
 template<typename RealType>
 std::vector<torch::Tensor> diceloss_cpu_backward(torch::Tensor inData, bool bInDataGrad, torch::Tensor inMask, bool bInMaskGrad, torch::Tensor inWeight, bool bInWeightGrad, torch::Tensor outLossGrad, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, const RealType &smooth, int p, ReductionType eReduction);
 
 template<typename RealType>
+torch::Tensor binarydiceloss_gpu_forward(torch::Tensor inData, torch::Tensor inMask, torch::Tensor inWeight, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, const RealType &smooth, int p, ReductionType eReduction);
+
+template<typename RealType>
 torch::Tensor diceloss_gpu_forward(torch::Tensor inData, torch::Tensor inMask, torch::Tensor inWeight, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, const RealType &smooth, int p, ReductionType eReduction);
+
+template<typename RealType>
+std::vector<torch::Tensor> binarydiceloss_gpu_backward(torch::Tensor inData, bool bInDataGrad, torch::Tensor inMask, bool bInMaskGrad, torch::Tensor inWeight, bool bInWeightGrad, torch::Tensor outLossGrad, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, const RealType &smooth, int p, ReductionType eReduction);
 
 template<typename RealType>
 std::vector<torch::Tensor> diceloss_gpu_backward(torch::Tensor inData, bool bInDataGrad, torch::Tensor inMask, bool bInMaskGrad, torch::Tensor inWeight, bool bInWeightGrad, torch::Tensor outLossGrad, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, const RealType &smooth, int p, ReductionType eReduction);
 
+torch::Tensor binarydiceloss_gpu_forward_half(torch::Tensor inData, torch::Tensor inMask, torch::Tensor inWeight, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, float smooth, int p, ReductionType eReduction);
+
 torch::Tensor diceloss_gpu_forward_half(torch::Tensor inData, torch::Tensor inMask, torch::Tensor inWeight, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, float smooth, int p, ReductionType eReduction);
+
+std::vector<torch::Tensor> binarydiceloss_gpu_backward_half(torch::Tensor inData, bool bInDataGrad, torch::Tensor inMask, bool bInMaskGrad, torch::Tensor inWeight, bool bInWeightGrad, torch::Tensor outLossGrad, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, float smooth, int p, ReductionType eReduction);
 
 std::vector<torch::Tensor> diceloss_gpu_backward_half(torch::Tensor inData, bool bInDataGrad, torch::Tensor inMask, bool bInMaskGrad, torch::Tensor inWeight, bool bInWeightGrad, torch::Tensor outLossGrad, int64_t i64IgnoreChannel, int64_t i64IgnoreLabel, float smooth, int p, ReductionType eReduction);
 
