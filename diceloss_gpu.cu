@@ -668,7 +668,7 @@ __global__ void BinaryDiceLossBackwardKernelDataHalf(const __half *d_inData, con
     }
 
     __half s =  __ushort_as_half(0);
-    __half ds = dsigmoid(d_inData[(b*i64NumChannels + 0)*i64InnerDataNum + i], s);
+    const __half ds = dsigmoid(d_inData[(b*i64NumChannels + 0)*i64InnerDataNum + i], s);
     const float a_values[2] = { 1.0f - __half2float(s), __half2float(s) };
     const float a_dvalues[2] = { -__half2float(ds), __half2float(ds) };
 
@@ -693,7 +693,7 @@ __global__ void BinaryDiceLossBackwardKernelDataHalf(const __half *d_inData, con
         tmp -= (2.0f*den*binaryLabel - num)/(den*den) * a_dvalues[c] * weight;
         break;
       default:
-        tmp -= (2.0f*den*binaryLabel - p*pow(a_values[c], p-1)*num) * a_dvalues[c] * weight;
+        tmp -= (2.0f*den*binaryLabel - p*pow(a_values[c], p-1)*num)/(den*den) * a_dvalues[c] * weight;
         break;
       }
     }
